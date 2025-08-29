@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Time Blocker - Authenticate</title>
+    <meta charset="utf-8">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            max-width: 400px;
+            text-align: center;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            margin: 10px;
+            background: #4285f4;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: 500;
+        }
+        .btn:hover {
+            background: #357ae8;
+        }
+        .btn-microsoft {
+            background: #00a4ef;
+        }
+        .btn-microsoft:hover {
+            background: #0078d4;
+        }
+        .success {
+            color: green;
+            margin-top: 20px;
+            padding: 20px;
+            background: #f0f9ff;
+            border-radius: 5px;
+        }
+        .token-box {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
+            word-break: break-all;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⏱ Time Blocker</h1>
+        <p>Connect your calendar to sync events</p>
+        
+        <div id="auth-buttons">
+            <a href="#" class="btn" onclick="signInWithGoogle()">
+                📅 Connect Google Calendar
+            </a>
+            <br>
+            <a href="#" class="btn btn-microsoft" onclick="signInWithMicrosoft()">
+                📮 Connect Microsoft Outlook
+            </a>
+        </div>
+        
+        <div id="success-message" style="display: none;" class="success">
+            <h2>✅ Authentication Successful!</h2>
+            <p>Copy this token and paste it in the Time Blocker app:</p>
+            <div id="token-display" class="token-box"></div>
+            <button onclick="copyToken()">📋 Copy Token</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getAuth, signInWithPopup, GoogleAuthProvider, OAuthProvider } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+
+        // Replace with your Firebase configuration
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY_HERE",
+            authDomain: "your-project.firebaseapp.com",
+            projectId: "your-project-id",
+            storageBucket: "your-project.firebasestorage.app",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        
+        const googleProvider = new GoogleAuthProvider();
+        googleProvider.addScope('https://www.googleapis.com/auth/calendar.readonly');
+        
+        const microsoftProvider = new OAuthProvider('microsoft.com');
+        microsoftProvider.addScope('https://graph.microsoft.com/calendars.read');
+
+        window.signInWithGoogle = async function() {
+            try {
+                const result = await signInWithPopup(auth, googleProvider);
+                const credential = GoogleAuthProvider.credentialFromResult(result);
+                showSuccess(result.user, credential?.accessToken, 'google');
+            } catch (error) {
+                alert('Authentication failed: ' + error.message);
+            }
+        };
+
+        window.signInWithMicrosoft = async function() {
+            try {
+                const result = await signInWithPopup(auth, microsoftProvider);
+                const credential = OAuthProvider.credentialFromResult(result);
+                showSuccess(result.user, credential?.accessToken, 'microsoft');
+            } catch (error) {
+                alert('Authentication failed: ' + error.message);
+            }
+        };
+
+        async function showSuccess(user, accessToken, provider) {
+            const token = await user.getIdToken();
+            const authData = {
+                provider: provider,
+                email: user.email,
+                uid: user.uid,
+                accessToken: accessToken || token,
+                idToken: token,
+                timestamp: Date.now()
+            };
+            
+            const encodedData = btoa(JSON.stringify(authData));
+            
+            document.getElementById('auth-buttons').style.display = 'none';
+            document.getElementById('success-message').style.display = 'block';
+            document.getElementById('token-display').textContent = encodedData;
+            
+            window.authToken = encodedData;
+        }
+
+        window.copyToken = function() {
+            navigator.clipboard.writeText(window.authToken);
+            alert('Token copied to clipboard! Paste it in the Time Blocker app.');
+        };
+    </script>
+</body>
+</html>
