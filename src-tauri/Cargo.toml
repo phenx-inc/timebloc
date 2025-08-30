@@ -1,7 +1,7 @@
 [package]
-name = "time-blocker"
+name = "timebloc"
 version = "0.1.0"
-description = "A lightweight time blocking app"
+description = "TimeBloc - A modern time blocking app"
 authors = ["you"]
 license = "MIT"
 repository = ""

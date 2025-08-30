@@ -6,7 +6,7 @@
     "distDir": "../out"
   },
   "package": {
-    "productName": "Time Blocker React",
+    "productName": "TimeBloc",
     "version": "0.1.0"
   },
   "tauri": {
@@ -46,7 +46,10 @@
         "depends": []
       },
       "externalBin": [],
-      "icon": [],
+      "icon": [
+        "icons/icon.png",
+        "icons/icon.icns"
+      ],
       "identifier": "com.timeblock.react.app",
       "longDescription": "",
       "macOS": {
@@ -76,7 +79,7 @@
         "fullscreen": false,
         "height": 1000,
         "resizable": true,
-        "title": "Time Blocker React",
+        "title": "TimeBloc",
         "width": 800,
         "minHeight": 900,
         "minWidth": 700,

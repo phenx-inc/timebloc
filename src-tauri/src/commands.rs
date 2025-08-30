@@ -244,3 +244,25 @@ pub fn load_attachment(file_path: String, state: State<AppState>) -> Result<Vec<
     let full_path = state.files.get_data_dir().join(&file_path);
     std::fs::read(&full_path).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn get_time_block_notes(block_id: i64, state: State<AppState>) -> Result<String, String> {
+    let conn = state.db.lock().unwrap();
+    
+    // Get the notes file path for this block
+    let notes_file: Option<String> = conn.query_row(
+        "SELECT notes_file FROM time_blocks WHERE id = ?1",
+        [block_id],
+        |row| row.get(0)
+    ).map_err(|e| e.to_string())?;
+    
+    if let Some(file_path) = notes_file {
+        // Load the notes content from file
+        match state.files.load_notes(&file_path) {
+            Ok(content) => Ok(content),
+            Err(_) => Ok(String::new()) // Return empty string if file doesn't exist
+        }
+    } else {
+        Ok(String::new()) // No notes file associated with this block
+    }
+}

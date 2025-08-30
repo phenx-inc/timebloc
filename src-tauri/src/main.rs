@@ -560,6 +560,7 @@ fn main() {
             save_attachment,
             get_attachments,
             load_attachment,
+            get_time_block_notes,
             get_google_auth_url,
             exchange_google_code,
             start_google_oauth,

@@ -55,6 +55,9 @@ export default function Home() {
   const [modalTags, setModalTags] = useState('');
   const [selectedStartMinutes, setSelectedStartMinutes] = useState(0);
   const [selectedDurationMinutes, setSelectedDurationMinutes] = useState(30);
+  const [titleSuggestions, setTitleSuggestions] = useState<Array<{title: string, color: string}>>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
 
   // Refs for scrolling
   const timeGridRef = useRef<HTMLDivElement>(null);
@@ -93,6 +96,11 @@ export default function Home() {
   const [authToken, setAuthToken] = useState('');
   const [pendingProvider, setPendingProvider] = useState<string>('');
   
+  // Navigation and selection state
+  const [selectedBlockId, setSelectedBlockId] = useState<number | null>(null);
+  const [selectedTimeSlot, setSelectedTimeSlot] = useState<{hour: number, minute: number} | null>(null);
+  const [currentTimeSlot, setCurrentTimeSlot] = useState<{hour: number, minute: number} | null>(null);
+  
   const [isDragging, setIsDragging] = useState(false);
   const [draggedItem, setDraggedItem] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
@@ -108,6 +116,7 @@ export default function Home() {
       const { invoke } = await import('@tauri-apps/api/tauri');
       
       const blocks = await invoke('get_time_blocks', { date: currentDate });
+      console.log('🎨 Loaded time blocks with colors:', (blocks as TimeBlock[]).map(b => ({ title: b.title, color: b.color })));
       setTimeBlocks(blocks as TimeBlock[]);
       
       // Load calendar events for the current date
@@ -357,6 +366,56 @@ export default function Home() {
     return hours * 60 + minutes;
   };
 
+  // Get unique time block entries with their latest colors
+  const getUniqueTitleEntries = () => {
+    const titleEntries = new Map<string, {title: string, color: string, lastUsed: number}>();
+    
+    // Sort blocks by ID to get chronological order (assuming higher ID = more recent)
+    const sortedBlocks = [...timeBlocks].sort((a, b) => (b.id || 0) - (a.id || 0));
+    
+    sortedBlocks.forEach(block => {
+      const titleKey = block.title.trim().toLowerCase();
+      if (titleKey && !titleEntries.has(titleKey)) {
+        titleEntries.set(titleKey, {
+          title: block.title,
+          color: block.color || '#3b82f6',
+          lastUsed: block.id || 0
+        });
+      }
+    });
+    
+    return Array.from(titleEntries.values()).map(entry => ({
+      title: entry.title,
+      color: entry.color
+    }));
+  };
+
+  // Handle title input and show suggestions
+  const handleTitleChange = (value: string) => {
+    setModalTitle(value);
+    
+    if (value.trim().length > 0) {
+      const uniqueEntries = getUniqueTitleEntries();
+      const filtered = uniqueEntries.filter(entry => 
+        entry.title.toLowerCase().includes(value.toLowerCase())
+      );
+      setTitleSuggestions(filtered);
+      setShowSuggestions(filtered.length > 0);
+      setSelectedSuggestionIndex(-1);
+    } else {
+      setShowSuggestions(false);
+      setTitleSuggestions([]);
+    }
+  };
+
+  // Select a suggestion
+  const selectSuggestion = (suggestion: {title: string, color: string}) => {
+    setModalTitle(suggestion.title);
+    setModalColor(suggestion.color);
+    setShowSuggestions(false);
+    setSelectedSuggestionIndex(-1);
+  };
+
   const openCreateModal = (startTime: string) => {
     setEditingBlock(null);
     setModalTitle('');
@@ -365,6 +424,9 @@ export default function Home() {
     setModalTags('');
     setSelectedStartMinutes(timeToMinutes(startTime));
     setSelectedDurationMinutes(30);
+    setShowSuggestions(false);
+    setTitleSuggestions([]);
+    setSelectedSuggestionIndex(-1);
     setShowModal(true);
   };
 
@@ -396,6 +458,8 @@ export default function Home() {
         tags: validation.sanitized.tags ? validation.sanitized.tags.split(',').map(t => t.trim()).filter(t => t) : []
       };
       
+      console.log('🎨 Saving time block with color:', modalColor, 'Full block:', block);
+      
       await invoke('save_time_block', { 
         block, 
         notesContent: validation.sanitized.notes || null 
@@ -408,6 +472,250 @@ export default function Home() {
       alert('Failed to save time block. Please try again.');
     }
   };
+
+  const editTimeBlock = (block: TimeBlock) => {
+    console.log('🎨 Editing time block with color:', block.color, 'Title:', block.title);
+    setEditingBlock(block);
+    setModalTitle(block.title);
+    setSelectedStartMinutes(block.start_minutes);
+    setSelectedDurationMinutes(block.duration_minutes);
+    setModalColor(block.color);
+    setModalTags(block.tags.join(', '));
+    // Load notes if available
+    loadBlockNotes(block.id);
+    setShowModal(true);
+  };
+
+  const loadBlockNotes = async (blockId?: number) => {
+    if (!blockId) {
+      setModalNotes('');
+      return;
+    }
+    
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      const notes = await invoke('get_time_block_notes', { blockId }) as string;
+      setModalNotes(notes || '');
+    } catch (error) {
+      console.warn('Failed to load block notes:', error);
+      setModalNotes('');
+    }
+  };
+
+  const deleteTimeBlock = async (blockId: number) => {
+    if (!confirm('Are you sure you want to delete this time block?')) {
+      return;
+    }
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/tauri');
+      await invoke('delete_time_block', { blockId });
+      await loadDayData();
+      setSelectedBlockId(null);
+    } catch (error) {
+      console.error('Failed to delete time block:', error);
+      alert('Failed to delete time block. Please try again.');
+    }
+  };
+
+  // Navigation functions
+  const getAllTimeBlocks = () => {
+    return timeBlocks.sort((a, b) => a.start_minutes - b.start_minutes);
+  };
+
+  // Get all time slots (including empty ones)
+  const getAllTimeSlots = () => {
+    const slots = [];
+    for (let hour = 0; hour < 24; hour++) {
+      slots.push({ hour, minute: 0, startMinutes: hour * 60 });
+      slots.push({ hour, minute: 30, startMinutes: hour * 60 + 30 });
+    }
+    return slots;
+  };
+
+  const navigateToBlock = (direction: 'up' | 'down') => {
+    const allTimeSlots = getAllTimeSlots();
+    const allBlocks = getAllTimeBlocks();
+
+    // If we're currently selecting a block, navigate between blocks and slots
+    if (selectedBlockId !== null) {
+      const currentBlock = allBlocks.find(block => block.id === selectedBlockId);
+      if (currentBlock) {
+        const currentSlotIndex = allTimeSlots.findIndex(slot => slot.startMinutes === currentBlock.start_minutes);
+        let newIndex;
+        
+        if (direction === 'up') {
+          newIndex = currentSlotIndex > 0 ? currentSlotIndex - 1 : allTimeSlots.length - 1;
+        } else {
+          newIndex = currentSlotIndex < allTimeSlots.length - 1 ? currentSlotIndex + 1 : 0;
+        }
+        
+        const newSlot = allTimeSlots[newIndex];
+        const blockAtSlot = allBlocks.find(block => block.start_minutes === newSlot.startMinutes);
+        
+        if (blockAtSlot) {
+          setSelectedBlockId(blockAtSlot.id || null);
+          setSelectedTimeSlot(null);
+        } else {
+          setSelectedBlockId(null);
+          setSelectedTimeSlot(newSlot);
+        }
+        
+        scrollToTimeSlot(newSlot.startMinutes);
+        return;
+      }
+    }
+
+    // If we're currently selecting a time slot, navigate between slots
+    if (selectedTimeSlot !== null) {
+      const currentSlotIndex = allTimeSlots.findIndex(slot => 
+        slot.hour === selectedTimeSlot.hour && slot.minute === selectedTimeSlot.minute
+      );
+      
+      let newIndex;
+      if (direction === 'up') {
+        newIndex = currentSlotIndex > 0 ? currentSlotIndex - 1 : allTimeSlots.length - 1;
+      } else {
+        newIndex = currentSlotIndex < allTimeSlots.length - 1 ? currentSlotIndex + 1 : 0;
+      }
+      
+      const newSlot = allTimeSlots[newIndex];
+      const blockAtSlot = allBlocks.find(block => block.start_minutes === newSlot.startMinutes);
+      
+      if (blockAtSlot) {
+        setSelectedBlockId(blockAtSlot.id || null);
+        setSelectedTimeSlot(null);
+      } else {
+        setSelectedTimeSlot(newSlot);
+      }
+      
+      scrollToTimeSlot(newSlot.startMinutes);
+      return;
+    }
+
+    // No selection - start with first time slot
+    const firstSlot = allTimeSlots[0];
+    const blockAtFirstSlot = allBlocks.find(block => block.start_minutes === firstSlot.startMinutes);
+    
+    if (blockAtFirstSlot) {
+      setSelectedBlockId(blockAtFirstSlot.id || null);
+      setSelectedTimeSlot(null);
+    } else {
+      setSelectedTimeSlot(firstSlot);
+    }
+    
+    scrollToTimeSlot(firstSlot.startMinutes);
+  };
+
+  const scrollToTimeSlot = (startMinutes: number) => {
+    const hour = Math.floor(startMinutes / 60);
+    const minute = startMinutes % 60;
+    
+    // Find the time slot element and scroll to it
+    if (timeGridRef.current) {
+      const hourElements = timeGridRef.current.querySelectorAll('.grid > .contents');
+      if (hourElements[hour]) {
+        hourElements[hour].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  };
+
+  // Update current time slot every minute
+  useEffect(() => {
+    const updateCurrentTime = () => {
+      const now = new Date();
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      
+      // Round to nearest 30-minute slot
+      const roundedMinutes = Math.floor(currentMinutes / 30) * 30;
+      const hour = Math.floor(roundedMinutes / 60);
+      const minute = roundedMinutes % 60;
+      
+      setCurrentTimeSlot({ hour, minute });
+    };
+
+    // Update immediately
+    updateCurrentTime();
+    
+    // Update every minute
+    const interval = setInterval(updateCurrentTime, 60000);
+    
+    return () => clearInterval(interval);
+  }, []);
+
+  // Calculate time state and progress for time blocks
+  const getBlockTimeState = (block: TimeBlock): { state: 'past' | 'current' | 'future', progress: number } => {
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const blockStart = block.start_minutes;
+    const blockEnd = block.start_minutes + block.duration_minutes;
+    
+    // If current time is before block starts
+    if (currentMinutes < blockStart) {
+      return { state: 'future', progress: 0 };
+    }
+    
+    // If current time is after block ends
+    if (currentMinutes >= blockEnd) {
+      return { state: 'past', progress: 100 };
+    }
+    
+    // Block is currently active - calculate progress percentage
+    const elapsed = currentMinutes - blockStart;
+    const progress = (elapsed / block.duration_minutes) * 100;
+    
+    return { 
+      state: 'current', 
+      progress: Math.min(Math.max(progress, 0), 100) 
+    };
+  };
+
+  // Keyboard event handler
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (showModal || showTokenInput) return; // Don't handle when modal is open
+
+    switch (e.key) {
+      case 'ArrowUp':
+        e.preventDefault();
+        navigateToBlock('up');
+        break;
+      case 'ArrowDown':
+        e.preventDefault();
+        navigateToBlock('down');
+        break;
+      case 'Enter':
+        if (selectedBlockId) {
+          const selectedBlock = timeBlocks.find(block => block.id === selectedBlockId);
+          if (selectedBlock) {
+            editTimeBlock(selectedBlock);
+          }
+        } else if (selectedTimeSlot) {
+          // Open create modal for selected empty time slot
+          const timeStr = `${selectedTimeSlot.hour.toString().padStart(2, '0')}:${selectedTimeSlot.minute.toString().padStart(2, '0')}`;
+          openCreateModal(timeStr);
+        }
+        break;
+      case 'Delete':
+      case 'Backspace':
+        if (selectedBlockId) {
+          e.preventDefault();
+          deleteTimeBlock(selectedBlockId);
+        }
+        break;
+      case 'Escape':
+        setSelectedBlockId(null);
+        setSelectedTimeSlot(null);
+        break;
+    }
+  }, [selectedBlockId, selectedTimeSlot, timeBlocks, showModal, showTokenInput]);
+
+  // Add keyboard event listener
+  useEffect(() => {
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [handleKeyDown]);
 
   const getBlocksForTime = (startMinutes: number): TimeBlock[] => {
     return timeBlocks.filter(block => 
@@ -845,8 +1153,8 @@ export default function Home() {
         {/* Header */}
         <header className="flex items-center gap-4 pb-2 border-b border-border h-[60px]">
           <div className="flex items-center gap-2 text-lg font-semibold">
-            <span className="text-2xl">⏱</span>
-            The Time Box
+            <img src="/icon.png" alt="TimeBloc" className="w-8 h-8" />
+            TimeBloc
           </div>
           
           <div className="flex items-center gap-2">
@@ -1050,14 +1358,14 @@ export default function Home() {
           />
 
           {/* Time Grid */}
-          <Card className="overflow-hidden flex-1 ml-2">
+          <Card className="overflow-hidden flex-1 ml-2 flex flex-col">
           <div className="grid grid-cols-[40px_1fr_1fr] bg-muted/50 border-b text-xs font-medium">
-            <div className="p-1 text-center border-r"></div>
+            <div className="p-1 text-center border-r" title="Use ↑↓ arrows to navigate, Enter to open/edit, Delete to remove">Time</div>
             <div className="p-1 text-center border-r">:00</div>
             <div className="p-1 text-center">:30</div>
           </div>
           
-          <ScrollArea className="h-[calc(100vh-200px)]" ref={timeGridRef}>
+          <ScrollArea className="flex-1" ref={timeGridRef}>
             <div className="grid grid-cols-[40px_1fr_1fr]">
               {Array.from({length: 24}).map((_, hourIndex) => {
                 const hour = hourIndex;
@@ -1066,32 +1374,73 @@ export default function Home() {
                 return (
                   <div key={hourIndex} className="contents">
                     <div className="p-1 text-xs font-medium text-center text-muted-foreground bg-muted/50 border-r border-b">
-                      {hourStr}
+                      <div className="flex items-center gap-0.5">
+                        <span>
+                          {hour === 0 ? '12' : hour < 12 ? hour : hour === 12 ? '12' : hour - 12}
+                        </span>
+                        <span className="text-[8px] filter grayscale">
+                          {hour === 0 ? '🌙' : hour < 6 ? '🌙' : hour < 12 ? '☀️' : hour < 18 ? '☀️' : '🌙'}
+                        </span>
+                      </div>
                     </div>
                     
-                    <Button
-                      variant="ghost"
-                      className="h-8 justify-start border-r border-b p-1 rounded-none hover:bg-muted/50"
-                      onClick={() => openCreateModal(`${hourStr}:00`)}
-                    >
-                      <div className="space-y-1 w-full">
+                    <div className={`relative h-8 border-r border-b hover:bg-muted/50 ${
+                      selectedTimeSlot?.hour === hour && selectedTimeSlot?.minute === 0 
+                        ? 'bg-blue-100 dark:bg-blue-900/20 border-blue-400' 
+                        : ''
+                    }`}>
+                      <div className="w-full h-full relative">
                         {/* Time blocks */}
-                        {getBlocksForTime(hour * 60).map((block) => (
+                        {getBlocksForTime(hour * 60).map((block) => {
+                          const { state, progress } = getBlockTimeState(block);
+                          return (
                           <div
                             key={block.id}
-                            className="text-xs text-white px-1 py-0.5 rounded text-left cursor-pointer"
-                            style={{ backgroundColor: block.color }}
+                            className={`relative text-sm text-white px-2 py-1 rounded text-left cursor-pointer group transition-all overflow-hidden ${
+                              selectedBlockId === block.id 
+                                ? 'ring-2 ring-blue-400 ring-offset-1 ring-offset-background shadow-lg scale-105' 
+                                : 'hover:scale-102 hover:shadow-md'
+                            }`}
+                            style={{ 
+                              backgroundColor: block.color || '#3b82f6',
+                              width: `${Math.min(100, (block.duration_minutes / 30) * 100)}%`
+                            }}
                             onClick={(e) => {
                               e.stopPropagation();
-                              // TODO: Open edit modal
+                              setSelectedBlockId(block.id || null);
+                              editTimeBlock(block);
                             }}
                           >
-                            <div className="font-medium truncate">{block.title}</div>
-                            <div className="opacity-90 text-[10px]">
-                              {minutesToTime(block.start_minutes)} - {minutesToTime(block.start_minutes + block.duration_minutes)}
-                            </div>
+                            {/* Time state overlay */}
+                            <div 
+                              className="absolute inset-0 pointer-events-none"
+                              style={{
+                                background: state === 'past' 
+                                  ? 'rgba(0,0,0,0.3)' // Uniform dark overlay for completed blocks
+                                  : state === 'current' && progress > 0
+                                    ? `linear-gradient(to right, rgba(0,0,0,0.3) ${progress}%, transparent ${progress}%)` // Binary gradient for current block
+                                    : 'none' // No overlay for future blocks
+                              }}
+                            />
+                            
+                            <div className="font-medium truncate pr-6 relative z-10">{block.title}</div>
+                            
+                            {/* Delete button - only show on hover or when selected */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteTimeBlock(block.id!);
+                              }}
+                              className={`absolute top-0.5 right-0.5 text-white hover:text-red-200 text-xs font-bold leading-none transition-opacity z-20 ${
+                                selectedBlockId === block.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                              }`}
+                              title="Delete time block"
+                            >
+                              ×
+                            </button>
                           </div>
-                        ))}
+                          );
+                        })}
                         
                         {/* Calendar events */}
                         {getEventsForTime(hour * 60).map((event) => (
@@ -1113,31 +1462,74 @@ export default function Home() {
                           </div>
                         ))}
                       </div>
-                    </Button>
+                      
+                      {/* Empty slot - click to create new */}
+                      {getBlocksForTime(hour * 60).length === 0 && (
+                        <button
+                          className="absolute inset-0 w-full h-full opacity-0 hover:opacity-10 bg-primary transition-opacity"
+                          onClick={() => openCreateModal(`${hourStr}:00`)}
+                          title="Click to create time block"
+                        />
+                      )}
+                    </div>
                     
-                    <Button
-                      variant="ghost"
-                      className="h-8 justify-start border-b p-1 rounded-none hover:bg-muted/50"
-                      onClick={() => openCreateModal(`${hourStr}:30`)}
-                    >
-                      <div className="space-y-1 w-full">
+                    <div className={`relative h-8 border-b hover:bg-muted/50 ${
+                      selectedTimeSlot?.hour === hour && selectedTimeSlot?.minute === 30 
+                        ? 'bg-blue-100 dark:bg-blue-900/20 border-blue-400' 
+                        : ''
+                    }`}>
+                      <div className="w-full h-full relative">
                         {/* Time blocks */}
-                        {getBlocksForTime(hour * 60 + 30).map((block) => (
+                        {getBlocksForTime(hour * 60 + 30).map((block) => {
+                          const { state, progress } = getBlockTimeState(block);
+                          return (
                           <div
                             key={block.id}
-                            className="text-xs text-white px-1 py-0.5 rounded text-left cursor-pointer"
-                            style={{ backgroundColor: block.color }}
+                            className={`relative text-sm text-white px-2 py-1 rounded text-left cursor-pointer group transition-all overflow-hidden ${
+                              selectedBlockId === block.id 
+                                ? 'ring-2 ring-blue-400 ring-offset-1 ring-offset-background shadow-lg scale-105' 
+                                : 'hover:scale-102 hover:shadow-md'
+                            }`}
+                            style={{ 
+                              backgroundColor: block.color || '#3b82f6',
+                              width: `${Math.min(100, (block.duration_minutes / 30) * 100)}%`
+                            }}
                             onClick={(e) => {
                               e.stopPropagation();
-                              // TODO: Open edit modal
+                              setSelectedBlockId(block.id || null);
+                              editTimeBlock(block);
                             }}
                           >
-                            <div className="font-medium truncate">{block.title}</div>
-                            <div className="opacity-90 text-[10px]">
-                              {minutesToTime(block.start_minutes)} - {minutesToTime(block.start_minutes + block.duration_minutes)}
-                            </div>
+                            {/* Time state overlay */}
+                            <div 
+                              className="absolute inset-0 pointer-events-none"
+                              style={{
+                                background: state === 'past' 
+                                  ? 'rgba(0,0,0,0.3)' // Uniform dark overlay for completed blocks
+                                  : state === 'current' && progress > 0
+                                    ? `linear-gradient(to right, rgba(0,0,0,0.3) ${progress}%, transparent ${progress}%)` // Binary gradient for current block
+                                    : 'none' // No overlay for future blocks
+                              }}
+                            />
+                            
+                            <div className="font-medium truncate pr-6 relative z-10">{block.title}</div>
+                            
+                            {/* Delete button - only show on hover or when selected */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteTimeBlock(block.id!);
+                              }}
+                              className={`absolute top-0.5 right-0.5 text-white hover:text-red-200 text-xs font-bold leading-none transition-opacity z-20 ${
+                                selectedBlockId === block.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                              }`}
+                              title="Delete time block"
+                            >
+                              ×
+                            </button>
                           </div>
-                        ))}
+                          );
+                        })}
                         
                         {/* Calendar events */}
                         {getEventsForTime(hour * 60 + 30).map((event) => (
@@ -1159,7 +1551,16 @@ export default function Home() {
                           </div>
                         ))}
                       </div>
-                    </Button>
+                      
+                      {/* Empty slot - click to create new */}
+                      {getBlocksForTime(hour * 60 + 30).length === 0 && (
+                        <button
+                          className="absolute inset-0 w-full h-full opacity-0 hover:opacity-10 bg-primary transition-opacity"
+                          onClick={() => openCreateModal(`${hourStr}:30`)}
+                          title="Click to create time block"
+                        />
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -1179,19 +1580,72 @@ export default function Home() {
           </DialogHeader>
           
           <div className="space-y-4">
-            <div>
+            <div className="relative">
               <label className="text-sm font-medium">Title</label>
               <Input
                 value={modalTitle}
-                onChange={(e) => setModalTitle(e.target.value)}
+                onChange={(e) => handleTitleChange(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
-                    saveTimeBlock();
+                    if (showSuggestions && selectedSuggestionIndex >= 0) {
+                      selectSuggestion(titleSuggestions[selectedSuggestionIndex]);
+                    } else if (showSuggestions && titleSuggestions.length === 1) {
+                      selectSuggestion(titleSuggestions[0]);
+                    } else {
+                      saveTimeBlock();
+                    }
+                  } else if (e.key === 'ArrowDown' && showSuggestions) {
+                    e.preventDefault();
+                    setSelectedSuggestionIndex(prev => 
+                      prev < titleSuggestions.length - 1 ? prev + 1 : 0
+                    );
+                  } else if (e.key === 'ArrowUp' && showSuggestions) {
+                    e.preventDefault();
+                    setSelectedSuggestionIndex(prev => 
+                      prev > 0 ? prev - 1 : titleSuggestions.length - 1
+                    );
+                  } else if (e.key === 'Escape') {
+                    setShowSuggestions(false);
+                    setSelectedSuggestionIndex(-1);
+                  }
+                }}
+                onBlur={(e) => {
+                  // Delay hiding suggestions to allow clicking on them
+                  setTimeout(() => setShowSuggestions(false), 200);
+                }}
+                onFocus={() => {
+                  if (modalTitle.trim().length > 0 && titleSuggestions.length > 0) {
+                    setShowSuggestions(true);
                   }
                 }}
                 placeholder="What are you working on?"
                 className="mt-1"
+                autoComplete="off"
               />
+              
+              {/* Suggestions dropdown */}
+              {showSuggestions && titleSuggestions.length > 0 && (
+                <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-background border border-border rounded-md shadow-lg max-h-32 overflow-y-auto">
+                  {titleSuggestions.map((suggestion, index) => (
+                    <div
+                      key={`${suggestion.title}-${suggestion.color}`}
+                      className={`flex items-center gap-2 px-3 py-2 cursor-pointer text-sm ${
+                        index === selectedSuggestionIndex 
+                          ? 'bg-muted' 
+                          : 'hover:bg-muted/50'
+                      }`}
+                      onClick={() => selectSuggestion(suggestion)}
+                      onMouseEnter={() => setSelectedSuggestionIndex(index)}
+                    >
+                      <div 
+                        className="w-3 h-3 rounded-full border" 
+                        style={{ backgroundColor: suggestion.color }}
+                      />
+                      <span className="flex-1">{suggestion.title}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             
             <div>
@@ -1236,12 +1690,24 @@ export default function Home() {
             
             <div>
               <label className="text-sm font-medium">Color</label>
-              <input
-                type="color"
-                value={modalColor}
-                onChange={(e) => setModalColor(e.target.value)}
-                className="mt-1 w-16 h-10 border border-input rounded cursor-pointer"
-              />
+              <div className="mt-1 flex gap-1">
+                {[
+                  '#3b82f6', '#ef4444', '#22c55e', '#f59e0b', 
+                  '#8b5cf6', '#06b6d4', '#6b7280', '#1f2937'
+                ].map(color => (
+                  <button
+                    key={color}
+                    type="button"
+                    onClick={() => setModalColor(color)}
+                    className={`w-7 h-7 rounded-full cursor-pointer transition-all hover:scale-110 border-2 ${
+                      modalColor === color 
+                        ? 'border-foreground shadow-md scale-110' 
+                        : 'border-transparent hover:border-border'
+                    }`}
+                    style={{ backgroundColor: color }}
+                  />
+                ))}
+              </div>
             </div>
             
             <div>
@@ -1275,7 +1741,7 @@ export default function Home() {
                 Cancel
               </Button>
               <Button onClick={saveTimeBlock}>
-                Save
+                {editingBlock ? 'Update Time Block' : 'Create Time Block'}
               </Button>
             </div>
           </div>
